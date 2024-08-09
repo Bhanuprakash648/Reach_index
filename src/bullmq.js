@@ -1,26 +1,16 @@
-import pkg from 'bullmq';
-
-const { Queue, QueueEvents, Worker } = pkg;  // Import BullMQ classes
-import Redis from 'ioredis'; // Ensure this is installed
+import { Agenda } from 'agenda';
 import { fetchGmailMessages, fetchOutlookMessages, categorizeEmail } from './mail/fetch.js';
 import { getCategorizationAndReply } from './mail/openai.js';
 import respond from './mail/respond.js';
 
 const { sendGmailReply, sendOutlookReply } = respond;
 
-// Create a Redis connection
-const client = Redis.createClient({
-  host: "localhost",
-  port: 6379,
-  password: "1234",
-  user: "username"
-});
+// Initialize Agenda with MongoDB
+const agenda = new Agenda({ db: { address: 'mongodb://localhost:27017/agenda' } });
 
-const emailQueue = new Queue('emailQueue', { connection: client });
-const queueScheduler = new QueueEvents('emailQueue', { connection: client });
-
-const worker = new Worker('emailQueue', async (job) => {
-  const { gmailTokens, outlookTokens } = job.data;
+// Define a job to process emails
+agenda.define('processEmails', async (job) => {
+  const { gmailTokens, outlookTokens } = job.attrs.data;
 
   const gmailMessages = await fetchGmailMessages(gmailTokens); 
   for (const message of gmailMessages) {
@@ -35,10 +25,13 @@ const worker = new Worker('emailQueue', async (job) => {
     const reply = await getCategorizationAndReply(message.bodyPreview); 
     await sendOutlookReply(reply, message.id, outlookTokens);
   }
-}, { connection: redisConnection });
+});
 
+// Function to add a job to the queue
 const addEmailJob = async (gmailTokens, outlookTokens) => { 
-  await emailQueue.add('processEmails', { gmailTokens, outlookTokens });
+  await agenda.start();
+  await agenda.schedule(new Date(), 'processEmails', { gmailTokens, outlookTokens });
 };
 
+// Export the function to add jobs
 export { addEmailJob };
